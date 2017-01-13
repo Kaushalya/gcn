@@ -3,7 +3,7 @@ import cPickle as pkl
 import networkx as nx
 import scipy.sparse as sp
 from scipy.sparse.linalg.eigen.arpack import eigsh
-
+from sklearn.preprocessing import OneHotEncoder
 
 def parse_index_file(filename):
     """Parse index file."""
@@ -20,6 +20,39 @@ def sample_mask(idx, l):
     return np.array(mask, dtype=np.bool)
 
 
+def load_directed_data(dataset_str):
+    print("loading directed data")
+    data = pkl.load(open("data/{}.data".format(dataset_str), 'rb'))
+    adj = nx.adjacency_matrix(data['NXGraph'])
+    features = data['CSRFeatures'].tolil()
+    labels = data['Labels']
+    
+    encoder = OneHotEncoder()
+    labels = encoder.fit_transform(labels.reshape(-1,1))
+    labels = labels.toarray()
+      
+    test_idx_reorder = parse_index_file("data/ind.{}.test.index".format(dataset_str))
+    test_idx_range = np.sort(test_idx_reorder)
+    
+    features[test_idx_reorder, :] = features[test_idx_range, :]
+    labels[test_idx_reorder, :] = labels[test_idx_range, :]
+    idx_test = test_idx_range.tolist()
+    idx_train = range(120)
+    idx_val = range(120, 120+500)
+    
+    train_mask = sample_mask(idx_train, labels.shape[0])
+    val_mask = sample_mask(idx_val, labels.shape[0])
+    test_mask = sample_mask(idx_test, labels.shape[0])
+    
+    y_train = np.zeros(labels.shape)
+    y_val = np.zeros(labels.shape)
+    y_test = np.zeros(labels.shape)
+    y_train[train_mask, :] = labels[train_mask, :]
+    y_val[val_mask, :] = labels[val_mask, :]
+    y_test[test_mask, :] = labels[test_mask, :]
+    
+    return adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask
+    
 def load_data(dataset_str):
     """Load data."""
     names = ['x', 'y', 'tx', 'ty', 'allx', 'ally', 'graph']
@@ -108,32 +141,54 @@ def normalize_adj(adj):
 def preprocess_adj(adj):
     """Preprocessing of adjacency matrix for simple GCN model and conversion to tuple representation."""
     adj_normalized = normalize_adj(adj + sp.eye(adj.shape[0]))
-    return sparse_to_tuple(adj_normalized)
-
+    return sparse_to_tuple(adj_normalized)    
+    
 def preprocess_mage(adj):
     """Preprocessing of adjacency matrix to motif matrix
     Protype: triangle motif"""
+    
+    #TODO add other moifs here
     coocurence_count = {}
+    wedge_count = {}
+    
     g = nx.from_scipy_sparse_matrix(adj)
     for node in g:
-        n_set = set(g.neighbors(node))
+        n_set = set(g.neighbors(node))        
+        
         for neig in n_set:
-            if (node, neig) in coocurence_count:
-                continue
             nn_set = set(g.neighbors(neig))
             intersect = n_set.intersection(nn_set)
-            if intersect:
-                coocurence_count[(node, neig)] = len(intersect) + 1
-                coocurence_count[(neig, node)] = len(intersect) + 1
-            else:
-                coocurence_count[(node, neig)] = 1
-                coocurence_count[(neig, node)] = 1
+            diff = n_set.difference(nn_set)
+            
+            if (node, neig) not in coocurence_count:
+                if intersect:
+                    coocurence_count[(node, neig)] = len(intersect)+1
+                    coocurence_count[(neig, node)] = len(intersect)+1
+                else:
+                    coocurence_count[(node, neig)] = 1
+                    coocurence_count[(neig, node)] = 1
+                if diff:
+                    wedge_count[(node, neig)] = len(diff)+1
+                    wedge_count[(neig, node)] = len(diff)+1
+                else:
+                    wedge_count[(node, neig)] = 1
+                    wedge_count[(neig, node)] = 1
+                
     row = np.array([i for i, _ in coocurence_count.keys()])
     col = np.array([j for _, j in coocurence_count.keys()])
     data = np.array([v for v in coocurence_count.values()])
-    adj = sp.csr_matrix((data, (row, col)), shape=adj.shape)
-    return preprocess_adj(adj)
+    m_adj = sp.csr_matrix((data, (row, col)), shape=adj.shape)
+    
+    w_row = np.array([i for i, _ in wedge_count.keys()])
+    w_col = np.array([j for _, j in wedge_count.keys()])
+    w_data = np.array([v for v in wedge_count.values()])
+    w_adj = sp.csr_matrix((w_data, (w_row, w_col)), shape=adj.shape)
+    
+    motif_mats = list()
+    motif_mats.append(preprocess_adj(m_adj))
+    motif_mats.append(preprocess_adj(w_adj))
 
+    return motif_mats
 
 def construct_feed_dict(features, support, labels, labels_mask, placeholders):
     """Construct feed dictionary."""
