@@ -6,7 +6,7 @@ import tensorflow as tf
 import numpy as np
 
 from gcn.utils import *
-from gcn.models import GCN, MLP
+from gcn.models import GCN, MLP, BCP
 
 # Set random seed
 seed = 123  
@@ -19,7 +19,7 @@ FLAGS = flags.FLAGS
 
 if(len(tf.app.flags.FLAGS.__dict__['__flags'])==0):
     flags.DEFINE_string('dataset', 'cora', 'Dataset string.')  # 'cora', 'citeseer', 'pubmed'
-    flags.DEFINE_string('model', 'gcn', 'Model string.')  # 'gcn', 'gcn_cheby', 'dense', 'mage'
+    flags.DEFINE_string('model', 'wp', 'Model string.')  # 'gcn', 'gcn_cheby', 'dense', 'mage'
     flags.DEFINE_float('learning_rate', 0.01, 'Initial learning rate.')
     flags.DEFINE_integer('epochs', 200, 'Number of epochs to train.')
     flags.DEFINE_integer('hidden1', 16, 'Number of units in hidden layer 1.')
@@ -28,15 +28,15 @@ if(len(tf.app.flags.FLAGS.__dict__['__flags'])==0):
     flags.DEFINE_integer('early_stopping', 10, 'Tolerance for early stopping (# of epochs).')
     flags.DEFINE_integer('max_degree', 3, 'Maximum Chebyshev polynomial degree.')
 
-flags.FLAGS.__dict__['__flags']['model'] = 'mage'    
+#flags.FLAGS.__dict__['__flags']['model'] = 'wp'    
 # Load data
-adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask = load_directed_data(FLAGS.dataset)
+adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask = load_data(FLAGS.dataset)
 
 # Some preprocessing
 features = preprocess_features(features)
 if FLAGS.model == 'gcn':
     print("gcn running...")
-    support = [preprocess_adj(adj)]
+    support = [preprocess_adj(adj, True)]
     num_supports = 1
     model_func = GCN
 elif FLAGS.model == 'gcn_cheby':
@@ -52,12 +52,19 @@ elif FLAGS.model == 'mage':
     support = preprocess_mage(adj)
     num_supports = 2
     model_func = GCN
+elif FLAGS.model == 'wp':  #weighted propagation
+    support = [preprocess_adj(adj, False)] 
+    support_wp = [preprocess_adj(adj, True)]
+    print("weighted propagation model running")
+    num_supports = 1
+    model_func = BCP    
 else:
     raise ValueError('Invalid argument for model: ' + str(FLAGS.model))
 
 # Define placeholders
 placeholders = {
     'support': [tf.sparse_placeholder(tf.float32) for _ in range(num_supports)],
+    'wp_support': [tf.sparse_placeholder(tf.float32) for _ in range(num_supports)],
     'features': tf.sparse_placeholder(tf.float32, shape=tf.constant(features[2], dtype=tf.int64)),
     'labels': tf.placeholder(tf.float32, shape=(None, y_train.shape[1])),
     'labels_mask': tf.placeholder(tf.int32),
@@ -75,7 +82,7 @@ sess = tf.Session()
 # Define model evaluation function
 def evaluate(features, support, labels, mask, placeholders):
     t_test = time.time()
-    feed_dict_val = construct_feed_dict(features, support, labels, mask, placeholders)
+    feed_dict_val = construct_feed_dict(features, support, labels, mask, placeholders, support_wp)
     outs_val = sess.run([model.loss, model.accuracy], feed_dict=feed_dict_val)
     return outs_val[0], outs_val[1], (time.time() - t_test)
 
@@ -90,7 +97,7 @@ for epoch in range(FLAGS.epochs):
 
     t = time.time()
     # Construct feed dictionary
-    feed_dict = construct_feed_dict(features, support, y_train, train_mask, placeholders)
+    feed_dict = construct_feed_dict(features, support, y_train, train_mask, placeholders, support_wp)
     feed_dict.update({placeholders['dropout']: FLAGS.dropout})
 
     # Training step
@@ -115,3 +122,4 @@ print("Optimization Finished!")
 test_cost, test_acc, test_duration = evaluate(features, support, y_test, test_mask, placeholders)
 print("Test set results:", "cost=", "{:.5f}".format(test_cost),
       "accuracy=", "{:.5f}".format(test_acc), "time=", "{:.5f}".format(test_duration))
+
