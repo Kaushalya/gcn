@@ -4,7 +4,7 @@ import networkx as nx
 import scipy.sparse as sp
 from scipy.sparse.linalg.eigen.arpack import eigsh
 import sys
-
+from sklearn.preprocessing import OneHotEncoder
 
 def parse_index_file(filename):
     """Parse index file."""
@@ -21,6 +21,39 @@ def sample_mask(idx, l):
     return np.array(mask, dtype=np.bool)
 
 
+def load_directed_data(dataset_str):
+    print("loading directed data")
+    data = pkl.load(open("data/{}.data".format(dataset_str), 'rb'))
+    adj = nx.adjacency_matrix(data['NXGraph'].to_undirected())
+    features = data['CSRFeatures'].tolil()
+    labels = data['Labels']
+    
+    encoder = OneHotEncoder(dtype=np.int16)
+    labels = encoder.fit_transform(labels.reshape(-1,1))
+    labels = labels.toarray()
+      
+    test_idx_reorder = parse_index_file("data/ind.{}.test.index".format(dataset_str))
+    test_idx_range = np.sort(test_idx_reorder)
+    
+    #features[test_idx_reorder, :] = features[test_idx_range, :]
+    #labels[test_idx_reorder, :] = labels[test_idx_range, :]
+    idx_test = test_idx_range.tolist()
+    idx_train = range(140)
+    idx_val = range(140, 140+500)
+    
+    train_mask = sample_mask(idx_train, labels.shape[0])
+    val_mask = sample_mask(idx_val, labels.shape[0])
+    test_mask = sample_mask(idx_test, labels.shape[0])
+    
+    y_train = np.zeros(labels.shape)
+    y_val = np.zeros(labels.shape)
+    y_test = np.zeros(labels.shape)
+    y_train[train_mask, :] = labels[train_mask, :]
+    y_val[val_mask, :] = labels[val_mask, :]
+    y_test[test_mask, :] = labels[test_mask, :]
+    
+    return adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask
+    
 def load_data(dataset_str):
     """
     Loads input data from gcn/data directory
@@ -129,13 +162,78 @@ def normalize_adj(adj):
     return adj.dot(d_mat_inv_sqrt).transpose().dot(d_mat_inv_sqrt).tocoo()
 
 
-def preprocess_adj(adj):
+def preprocess_adj(adj, weighted=True):
     """Preprocessing of adjacency matrix for simple GCN model and conversion to tuple representation."""
+   
     adj_normalized = normalize_adj(adj + sp.eye(adj.shape[0]))
-    return sparse_to_tuple(adj_normalized)
+    
+    if weighted:
+        g = nx.from_scipy_sparse_matrix(adj)
+        
+        print "calculating edge betweenness centrality"
+        ebw = nx.edge_betweenness_centrality(g)
+        ebw_mat = sp.dok_matrix(adj.shape, dtype=np.float64)
+        
+        for loc, value in ebw.items():
+            ebw_mat[loc] = 1./value
+        
+        ebw_mat = ebw_mat.tocoo()    
+        adj_normalized = np.multiply(adj_normalized, ebw_mat)
+                         
+    return sparse_to_tuple(sp.coo_matrix(adj_normalized))    
+    
+def preprocess_mage(adj):
+    """Preprocessing of adjacency matrix to motif matrix
+    Protype: triangle motif"""
+    
+    #TODO add other moifs here
+    coocurence_count = {}
+    wedge_count = {}
+    
+    g = nx.from_scipy_sparse_matrix(adj)
+    for node in g:
+        n_set = set(g.neighbors(node))        
+        
+        for neig in n_set:
+            nn_set = set(g.neighbors(neig))
+            intersect = n_set.intersection(nn_set)
+            diff = n_set.difference(nn_set)
+            
+            if (node, neig) not in coocurence_count:
+                if intersect:
+                    coocurence_count[(node, neig)] = len(intersect)+1
+                    coocurence_count[(neig, node)] = len(intersect)+1
+                else:
+                    coocurence_count[(node, neig)] = 1
+                    coocurence_count[(neig, node)] = 1
+                if diff:
+                    wedge_count[(node, neig)] = len(diff)+1
+                    wedge_count[(neig, node)] = len(diff)+1
+                else:
+                    wedge_count[(node, neig)] = 1
+                    wedge_count[(neig, node)] = 1
+                
+    row = np.array([i for i, _ in coocurence_count.keys()])
+    col = np.array([j for _, j in coocurence_count.keys()])
+    data = np.array([v for v in coocurence_count.values()])
+    m_adj = sp.csr_matrix((data, (row, col)), shape=adj.shape)
+    
+    w_row = np.array([i for i, _ in wedge_count.keys()])
+    w_col = np.array([j for _, j in wedge_count.keys()])
+    w_data = np.array([v for v in wedge_count.values()])
+    w_adj = sp.csr_matrix((w_data, (w_row, w_col)), shape=adj.shape)
+    
+    motif_mats = list()
+    motif_mats.append(preprocess_adj(m_adj))
+    motif_mats.append(preprocess_adj(w_adj))
 
+    return motif_mats
+    
+def preprocess_directed_mage(adj):
+    return None
+    
 
-def construct_feed_dict(features, support, labels, labels_mask, placeholders):
+def construct_feed_dict(features, support, labels, labels_mask, placeholders, support_wp=None):
     """Construct feed dictionary."""
     feed_dict = dict()
     feed_dict.update({placeholders['labels']: labels})
@@ -143,6 +241,9 @@ def construct_feed_dict(features, support, labels, labels_mask, placeholders):
     feed_dict.update({placeholders['features']: features})
     feed_dict.update({placeholders['support'][i]: support[i] for i in range(len(support))})
     feed_dict.update({placeholders['num_features_nonzero']: features[1].shape})
+    
+    if support_wp:
+        feed_dict.update({placeholders['wp_support'][i]: support_wp[i] for i in range(len(support_wp))})
     return feed_dict
 
 
@@ -167,3 +268,4 @@ def chebyshev_polynomials(adj, k):
         t_k.append(chebyshev_recurrence(t_k[-1], t_k[-2], scaled_laplacian))
 
     return sparse_to_tuple(t_k)
+
