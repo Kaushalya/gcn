@@ -6,6 +6,7 @@ from scipy.sparse.linalg.eigen.arpack import eigsh
 import sys
 from sklearn.preprocessing import OneHotEncoder
 
+
 def parse_index_file(filename):
     """Parse index file."""
     index = []
@@ -164,13 +165,11 @@ def normalize_adj(adj):
 
 def preprocess_adj(adj, weighted=True):
     """Preprocessing of adjacency matrix for simple GCN model and conversion to tuple representation."""
-   
     adj_normalized = normalize_adj(adj + sp.eye(adj.shape[0]))
     
     if weighted:
         g = nx.from_scipy_sparse_matrix(adj)
-        
-        print "calculating edge betweenness centrality"
+        print("calculating edge betweenness centrality")
         ebw = nx.edge_betweenness_centrality(g)
         ebw_mat = sp.dok_matrix(adj.shape, dtype=np.float64)
         
@@ -181,12 +180,11 @@ def preprocess_adj(adj, weighted=True):
         adj_normalized = np.multiply(adj_normalized, ebw_mat)
                          
     return sparse_to_tuple(sp.coo_matrix(adj_normalized))    
-    
+
+
 def preprocess_mage(adj):
     """Preprocessing of adjacency matrix to motif matrix
     Protype: triangle motif"""
-    
-    #TODO add other moifs here
     coocurence_count = {}
     wedge_count = {}
     
@@ -228,7 +226,8 @@ def preprocess_mage(adj):
     motif_mats.append(preprocess_adj(w_adj))
 
     return motif_mats
-    
+
+
 def preprocess_directed_mage(adj):
     return None
     

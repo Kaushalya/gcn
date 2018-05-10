@@ -1,6 +1,3 @@
-from __future__ import division
-from __future__ import print_function
-
 import time
 import tensorflow as tf
 import numpy as np
@@ -17,7 +14,8 @@ tf.set_random_seed(seed)
 flags = tf.app.flags
 FLAGS = flags.FLAGS
 
-if(len(tf.app.flags.FLAGS.__dict__['__flags'])==0):
+
+if len(tf.app.flags.FLAGS.__dict__['__flags']) == 0:
     flags.DEFINE_string('dataset', 'cora', 'Dataset string.')  # 'cora', 'citeseer', 'pubmed'
     flags.DEFINE_string('model', 'wp', 'Model string.')  # 'gcn', 'gcn_cheby', 'dense', 'mage'
     flags.DEFINE_float('learning_rate', 0.01, 'Initial learning rate.')
